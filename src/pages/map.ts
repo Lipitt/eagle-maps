@@ -1,81 +1,105 @@
-import { getState, setState, subscribe } from '@/store'
+import type { User } from '@supabase/supabase-js'
+import { supabase } from '@/lib/supabase'
 import { fetchRestaurants, addRestaurant, deleteRestaurant } from '@/lib/api'
 import { applyFilters } from '@/lib/filters'
 import { toast } from '@/lib/toast'
 import { createNavbar } from '@/components/navbar'
 import { createFilterPanel } from '@/components/filter-panel'
+import type { FilterPanelHandle } from '@/components/filter-panel'
 import { MapView } from '@/components/map-view'
+import { DEFAULT_FILTERS } from '@/types/filters'
 import type { Filters } from '@/types/filters'
+import type { Restaurant } from '@/types/restaurant'
 
 export function mountMapPage(container: HTMLElement): () => void {
-  // ─── Layout shell ─────────────────────────────────────────────────────────────
+  // ── Local state ────────────────────────────────────────────────────────────
+  let restaurants: Restaurant[] = []
+  let filters: Filters = { ...DEFAULT_FILTERS }
+  let currentUser: User | null = null
+
+  // ── Layout shell ───────────────────────────────────────────────────────────
   const page = document.createElement('div')
   page.className = 'page-map'
   container.appendChild(page)
 
-  // ─── Navbar ───────────────────────────────────────────────────────────────────
   const navbar = createNavbar(page)
 
-  // ─── Filter panel ─────────────────────────────────────────────────────────────
-  const filterPanel = createFilterPanel(page, (filters: Filters) => {
-    setState({ filters })
-  })
-
-  // ─── Map wrapper (fills the page, behind overlays) ────────────────────────────
+  // Map wrapper before filterPanel in the DOM — both are absolutely positioned,
+  // filterPanel sits on top via z-index regardless of insertion order.
   const mapWrapper = document.createElement('div')
   mapWrapper.className = 'map-wrapper'
   page.appendChild(mapWrapper)
 
-  // ─── Map view ─────────────────────────────────────────────────────────────────
-  const state = getState()
+  // ── Map view ───────────────────────────────────────────────────────────────
+  // filterPanel is declared with ! because its callbacks reference mapView,
+  // and mapView callbacks reference filterPanel — both closures fire after
+  // all synchronous setup is done, so both are assigned by then.
+  let filterPanel!: FilterPanelHandle
 
   const mapView = new MapView(
     mapWrapper,
     {
       onAdd: async (data) => {
-        const s = getState()
-        const newRestaurant = await addRestaurant({ ...data, created_by: s.user?.id ?? null })
-        setState({ restaurants: [newRestaurant, ...s.restaurants] })
+        const newRestaurant = await addRestaurant({ ...data, created_by: currentUser?.id ?? null })
+        restaurants = [newRestaurant, ...restaurants]
+        const filtered = applyFilters(restaurants, filters)
+        mapView.updateRestaurants(filtered)
+        filterPanel.update(filters, restaurants.length, filtered.length)
         toast.success('Restaurant added!')
       },
       onDelete: async (id) => {
         await deleteRestaurant(id)
-        const s = getState()
-        setState({ restaurants: s.restaurants.filter((r) => r.id !== id) })
+        restaurants = restaurants.filter((r) => r.id !== id)
+        const filtered = applyFilters(restaurants, filters)
+        mapView.updateRestaurants(filtered)
+        filterPanel.update(filters, restaurants.length, filtered.length)
         toast.success('Restaurant deleted.')
       },
       onDrawPolygon: (polygon) => {
-        const s = getState()
-        setState({ filters: { ...s.filters, polygon } })
+        filters = { ...filters, polygon }
+        const filtered = applyFilters(restaurants, filters)
+        mapView.updateRestaurants(filtered)
+        filterPanel.update(filters, restaurants.length, filtered.length)
       },
     },
-    state.user !== null,
-    state.user?.id ?? null,
+    false,
+    null,
   )
 
-  // Seed with any restaurants already in store
-  const initialFiltered = applyFilters(state.restaurants, state.filters)
-  mapView.updateRestaurants(initialFiltered)
-  navbar.update(state)
-  filterPanel.update(state.filters, state.restaurants.length, initialFiltered.length)
-
-  // ─── Fetch restaurants ────────────────────────────────────────────────────────
-  fetchRestaurants()
-    .then((restaurants) => setState({ restaurants }))
-    .catch((err: Error) => toast.error(`Failed to load restaurants: ${err.message}`))
-
-  // ─── Subscribe to state changes ───────────────────────────────────────────────
-  const unsubscribe = subscribe((s) => {
-    const filtered = applyFilters(s.restaurants, s.filters)
+  // ── Filter panel ───────────────────────────────────────────────────────────
+  filterPanel = createFilterPanel(page, (updated: Filters) => {
+    filters = updated
+    const filtered = applyFilters(restaurants, filters)
     mapView.updateRestaurants(filtered)
-    mapView.updateAuth(s.user !== null, s.user?.id ?? null)
-    navbar.update(s)
-    filterPanel.update(s.filters, s.restaurants.length, filtered.length)
+    filterPanel.update(filters, restaurants.length, filtered.length)
   })
 
-  // ─── Unmount ──────────────────────────────────────────────────────────────────
+  // ── Auth ───────────────────────────────────────────────────────────────────
+  supabase.auth.getSession().then(({ data: { session } }) => {
+    currentUser = session?.user ?? null
+    navbar.update(currentUser)
+    mapView.updateAuth(!!currentUser, currentUser?.id ?? null)
+  })
+
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    currentUser = session?.user ?? null
+    navbar.update(currentUser)
+    mapView.updateAuth(!!currentUser, currentUser?.id ?? null)
+  })
+
+  // ── Fetch restaurants ──────────────────────────────────────────────────────
+  fetchRestaurants()
+    .then((data) => {
+      restaurants = data
+      const filtered = applyFilters(restaurants, filters)
+      mapView.updateRestaurants(filtered)
+      filterPanel.update(filters, restaurants.length, filtered.length)
+    })
+    .catch((err: Error) => toast.error(`Failed to load restaurants: ${err.message}`))
+
+  // ── Unmount ────────────────────────────────────────────────────────────────
   return () => {
-    unsubscribe()
+    subscription.unsubscribe()
     mapView.destroy()
     container.innerHTML = ''
   }

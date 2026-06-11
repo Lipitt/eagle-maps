@@ -281,10 +281,13 @@ export class MapView {
   // ─── Data ────────────────────────────────────────────────────────────────────
 
   private applyData(): void {
-    if (!this.map.isStyleLoaded()) return
+    // Sources are added in onMapLoad — if they don't exist yet, bail and wait.
+    // Deliberately not using isStyleLoaded(): in Mapbox GL v3 that method checks
+    // pending tile requests too, so it can return false even inside the load handler.
+    if (!this.map.getSource('restaurants')) return
     const geojson = restaurantsToGeoJSON(this.restaurants)
-    ;(this.map.getSource('restaurants') as mapboxgl.GeoJSONSource)?.setData(geojson)
-    ;(this.map.getSource('restaurants-heatmap') as mapboxgl.GeoJSONSource)?.setData(geojson)
+    ;(this.map.getSource('restaurants') as mapboxgl.GeoJSONSource).setData(geojson)
+    ;(this.map.getSource('restaurants-heatmap') as mapboxgl.GeoJSONSource).setData(geojson)
     this.updateMarkers()
   }
 
@@ -447,7 +450,7 @@ export class MapView {
     heatBtn.textContent = this.showHeatmap ? '🔵 Clusters' : '🌡️ Heatmap'
     heatBtn.addEventListener('click', () => {
       this.showHeatmap = !this.showHeatmap
-      if (this.map.isStyleLoaded()) {
+      if (this.map.getSource('restaurants')) {
         this.map.setLayoutProperty('heatmap', 'visibility', this.showHeatmap ? 'visible' : 'none')
         this.map.setLayoutProperty('clusters', 'visibility', this.showHeatmap ? 'none' : 'visible')
         this.map.setLayoutProperty('cluster-count', 'visibility', this.showHeatmap ? 'none' : 'visible')
@@ -461,7 +464,7 @@ export class MapView {
     tdBtn.textContent = this.is3D ? '🗺️ 2D' : '🏙️ 3D'
     tdBtn.addEventListener('click', () => {
       this.is3D = !this.is3D
-      if (this.map.isStyleLoaded()) {
+      if (this.map.getSource('buildings')) {
         this.map.setLayoutProperty('3d-buildings', 'visibility', this.is3D ? 'visible' : 'none')
       }
       this.map.easeTo({ pitch: this.is3D ? 45 : 0, bearing: this.is3D ? -10 : 0, duration: 800 })

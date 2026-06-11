@@ -1,10 +1,10 @@
 import { navigate } from '@/router'
 import { supabase } from '@/lib/supabase'
-import type { State } from '@/store'
+import type { User } from '@supabase/supabase-js'
 
 export interface NavbarHandle {
   el: HTMLElement
-  update(state: State): void
+  update(user: User | null): void
 }
 
 export function createNavbar(parent: HTMLElement): NavbarHandle {
@@ -22,12 +22,12 @@ export function createNavbar(parent: HTMLElement): NavbarHandle {
   el.appendChild(actions)
   parent.appendChild(el)
 
-  function update(state: State): void {
+  function update(user: User | null): void {
     actions.innerHTML = ''
-    if (state.user) {
+    if (user) {
       const email = document.createElement('span')
       email.className = 'navbar-email'
-      email.textContent = state.user.email ?? ''
+      email.textContent = user.email ?? ''
 
       const signOutBtn = document.createElement('button')
       signOutBtn.className = 'btn btn-outline btn-sm'
